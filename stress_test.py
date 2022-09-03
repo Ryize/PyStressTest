@@ -1,11 +1,13 @@
 import time
 import threading
 import warnings
+from pprint import pprint
 from typing import Optional, NoReturn, Union
 
 import requests
 
 from abstarct.stress_test import AbstractStressTest
+from monitor import ChartMonitor, CMDMonitor
 
 
 class StressTest(AbstractStressTest):
@@ -47,6 +49,8 @@ class StressTest(AbstractStressTest):
         self._timeout = 3
         self._max_thread_count = 99999
         self._time_start = 0
+        self._previous_count_errors = 0
+        self._max_execution_time = 60 * 60 * 24 * 31  # 1 месяц
 
     def auto_create_connection(self, timeout: Optional[Union[int, float]] = None) -> None:
         """
@@ -57,7 +61,7 @@ class StressTest(AbstractStressTest):
         th = threading.Thread(target=self._auto_create_connection, args=(timeout or self.timeout,))
         th.start()
 
-    def auto_get_stats(self, timeout: Union[int, float] = 5) -> list:
+    def auto_get_stats(self, timeout: Union[int, float] = 5) -> Union[list, int]:
         """
         Метод для автоматического получения статистики по работе класса.
         В случае убийства всех запросов или возникновения ошибки, метод сообщит об этом
@@ -70,19 +74,21 @@ class StressTest(AbstractStressTest):
         :return: list
         """
         previous_count_connection = len(self.stats)
-        previous_count_errors = len(self._errors)
         while True:
             if self.kill:
                 warnings.warn('Все соединения убиты!')
-                continue
-            if previous_count_errors != len(self._errors):
-                warnings.warn(f"Прозошла(и) {len(self._errors[previous_count_errors:])} ошибок!")
-                previous_count_errors = len(self._errors)
+                break
+            if time.time() > self._time_start + self._max_execution_time:
+                print(f'Время выполнения теста закончилось.\nВыполнялся: {self._max_execution_time} секунд.')
+                self.kill_all_connections()
+            error_quantity = self._get_last_number_errors()
+            if error_quantity:
+                warnings.warn(f"Прозошла(и) {error_quantity} ошибок!")
+                yield error_quantity
             if previous_count_connection == len(self.stats):
                 continue
             yield list(self._stats.items())[previous_count_connection:]
             previous_count_connection = len(self.stats)
-            self._errors = []
             time.sleep(timeout)
 
     def create_connection(self, connection_type: str = 'GET') -> None:
@@ -123,16 +129,17 @@ class StressTest(AbstractStressTest):
         :param connection_type: str (тип запроса 'GET', 'POST' и т.д.)
         :return: None
         """
-        while not self._kill and len(self.errors) < 250:
+        while not self._kill:
             func = requests.request
             kwargs = {'method': connection_type, 'url': self._host}
+            time_now = time.time()
             try:
                 response, runtime = self._get_runtime(func, **kwargs)
             except requests.ConnectionError:
-                self._errors.append([time.time(), self._thread, self._stats])
+                self._errors.append([time.time(), len(self._thread), len(self._stats)])
                 continue
+            self._stats[time_now - runtime] = runtime
             self._check_response_status_code(response)
-            self._stats[time.time()] = runtime
             time.sleep(self._timeout)
 
     def _check_response_status_code(self, response):
@@ -143,7 +150,7 @@ class StressTest(AbstractStressTest):
         :return:
         """
         if response.status_code != 200:
-            self._errors.append([time.time(), self._thread, self._stats])
+            self._errors.append([time.time(), len(self._thread), len(self._stats)])
 
     def _auto_create_connection(self, timeout: int) -> None:
         """
@@ -155,15 +162,9 @@ class StressTest(AbstractStressTest):
         for _ in range(20):
             self.create_connection()
         while not self._kill:
-            if len(self.errors) < 250:
-                if len(self.thread) <= self.max_thread_count:
-                    for _ in range(self._func_increase_connections(len(self._thread))):
-                        self.create_connection()
-            else:
-                print('Сервер перестал отвечать!')
-                stats_text = 'Статистика:\nВсего запросов: {}\nВсего потоков: {}\nПотраченное время: {}'
-                print(stats_text.format(len(self.stats), len(self.thread), time.time()-self._time_start))
-                break
+            if len(self.thread) <= self.max_thread_count:
+                for _ in range(self._func_increase_connections(len(self._thread))):
+                    self.create_connection()
             time.sleep(timeout)
 
     @staticmethod
@@ -180,8 +181,13 @@ class StressTest(AbstractStressTest):
         response = func(*args, **kwargs)
         return response, time.time() - time_start
 
+    def _get_last_number_errors(self):
+        result = len(self._errors) - self._previous_count_errors
+        self._previous_count_errors = len(self._errors)
+        return result
+
     @property
-    def thread(self):
+    def thread(self) -> list:
         return self._thread
 
     @property
@@ -203,6 +209,16 @@ class StressTest(AbstractStressTest):
         if not isinstance(value, (int, float)) or value != abs(value):
             raise ValueError('Задержка должна быть числом (int, float) > 0')
         self._timeout = value
+
+    @property
+    def max_execution_time(self) -> Union[int, float]:
+        return self._max_execution_time
+
+    @max_execution_time.setter
+    def max_execution_time(self, value: Union[int, float]) -> None:
+        if not isinstance(value, (int, float)) or value <= 0:
+            raise ValueError('Значение max_execution_time может быть только типа int, float > 0')
+        self._max_execution_time = value
 
     @property
     def max_thread_count(self):
@@ -239,14 +255,3 @@ class StressTest(AbstractStressTest):
     @property
     def errors(self):
         return self._errors
-
-
-stress = StressTest('https://coursemc.space/api/v1/schedule/')
-stress.timeout = 0.1
-stress.max_thread_count = 100
-stress.auto_create_connection()
-for i in stress.auto_get_stats(0.2):
-    print(f'Потоков: {len(stress.thread)}')
-    print(f'Последние запросы: {len(i)}')
-    print(f'Запросов всего: {len(stress.stats)}')
-    print(f'Ошибок: {len(stress.errors)}', end='\n\n\n')
