@@ -1,13 +1,11 @@
 import time
 import threading
 import warnings
-from pprint import pprint
 from typing import Optional, NoReturn, Union
 
 import requests
 
 from abstarct.stress_test import AbstractStressTest
-from monitor import ChartMonitor, CMDMonitor
 
 
 class StressTest(AbstractStressTest):
@@ -142,7 +140,7 @@ class StressTest(AbstractStressTest):
             self._check_response_status_code(response)
             time.sleep(self._timeout)
 
-    def _check_response_status_code(self, response):
+    def _check_response_status_code(self, response) -> None:
         """
         Если код ответа != 200, записывает в self._errors
         (см. в __init__, что записывается в self._errors).
@@ -181,7 +179,11 @@ class StressTest(AbstractStressTest):
         response = func(*args, **kwargs)
         return response, time.time() - time_start
 
-    def _get_last_number_errors(self):
+    def _get_last_number_errors(self) -> int:
+        """
+        Получить последние ошибки.
+        :return: None
+        """
         result = len(self._errors) - self._previous_count_errors
         self._previous_count_errors = len(self._errors)
         return result
@@ -216,6 +218,11 @@ class StressTest(AbstractStressTest):
 
     @max_execution_time.setter
     def max_execution_time(self, value: Union[int, float]) -> None:
+        """
+        Устанавливает максимальное время тестирования.
+        :param value: Union[int, float](value >= 0)
+        :return: None
+        """
         if not isinstance(value, (int, float)) or value <= 0:
             raise ValueError('Значение max_execution_time может быть только типа int, float > 0')
         self._max_execution_time = value
@@ -228,8 +235,7 @@ class StressTest(AbstractStressTest):
     def max_thread_count(self, value: int):
         """
         Устанавливает максимальное кол-во потоков.
-        Должно быть int и > 20.
-        :param value: int
+        :param value: int (value > 20)
         :return: None
         """
         if not isinstance(value, int) or value != abs(value) or value < 20:
