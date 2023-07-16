@@ -22,4 +22,4 @@ if __name__ == '__main__':
     stress.max_thread_count = 100
     monitor = ChartMonitor(stress)
     monitor.start()
-    monitor.build_graph()
+    monitor.build_graph()  # В конце строим график
